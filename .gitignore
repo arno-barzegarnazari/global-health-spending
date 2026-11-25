@@ -1,0 +1,16 @@
+# R
+.Rhistory
+.RData
+.Ruserdata
+.Rproj.user/
+
+# Knitting leftovers
+*.knit.md
+*.tex
+*.log
+*_cache/
+*_files/
+
+# OS
+.DS_Store
+Thumbs.db

@@ -1,0 +1,184 @@
+---
+title: "Global Health Spending, 2000–2023"
+subtitle: "TidyTuesday 2026/04/21"
+author: "Arno Barzegarnazari"
+date: "`r format(Sys.Date(), '%B %d, %Y')`"
+output:
+  pdf_document:
+    fig_width: 7
+    fig_height: 4.2
+    fig_caption: false
+geometry: margin=2.5cm
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE,
+                      fig.align = "center")
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(readr)
+library(scales)
+
+theme_set(theme_minimal(base_size = 11) +
+            theme(plot.title = element_text(face = "bold"),
+                  panel.grid.minor = element_blank(),
+                  plot.caption = element_text(colour = "grey40")))
+src <- "Source: WHO Global Health Expenditure Database (via TidyTuesday)"
+```
+
+# Introduction
+
+This report explores the WHO Global Health Expenditure Database, which covers health spending in 195 countries from 2000 to 2023. The data comes in three files:
+
+- **health_spending**: total current health expenditure (CHE) and its funding sources (government, private, external).
+- **financing_schemes**: the schemes the money flows through, including household out-of-pocket payments.
+- **spending_purpose**: what the money is spent on (curative care, prevention, medical goods, etc.), available from 2016.
+
+Values are given either as a percentage of CHE or in constant 2023 US dollars.
+
+```{r load}
+base <- "https://raw.githubusercontent.com/rfordatascience/tidytuesday/main/data/2026/2026-04-21/"
+health_spending   <- read_csv(paste0(base, "health_spending.csv"))
+financing_schemes <- read_csv(paste0(base, "financing_schemes.csv"))
+spending_purpose  <- read_csv(paste0(base, "spending_purpose.csv"))
+```
+
+```{r overview}
+tibble(
+  file      = c("health_spending", "financing_schemes", "spending_purpose"),
+  rows      = c(nrow(health_spending), nrow(financing_schemes), nrow(spending_purpose)),
+  countries = c(n_distinct(health_spending$iso3_code),
+                n_distinct(financing_schemes$iso3_code),
+                n_distinct(spending_purpose$iso3_code)),
+  years     = c(paste(range(health_spending$year), collapse = "–"),
+                paste(range(financing_schemes$year), collapse = "–"),
+                paste(range(spending_purpose$year), collapse = "–"))
+) |>
+  knitr::kable(caption = "Dataset overview")
+```
+
+\newpage
+
+# 1. Global Health Spending Over Time
+
+```{r global-trend}
+global <- health_spending |>
+  filter(indicator_code == "che_usd2023") |>
+  group_by(year) |>
+  summarise(total = sum(value) / 1e12)
+
+ggplot(global, aes(year, total)) +
+  geom_line(linewidth = 1, colour = "#2C7FB8") +
+  geom_point(size = 1.8, colour = "#2C7FB8") +
+  scale_y_continuous(labels = label_dollar(suffix = "T"), limits = c(0, NA)) +
+  labs(title = "World Health Spending more than Doubled Since 2000",
+       subtitle = "Sum of current health expenditure, constant 2023 US$",
+       x = NULL, y = NULL, caption = src)
+```
+
+Total health spending grew from about \$`r round(global$total[global$year == 2000], 1)` trillion in 2000 to \$`r round(global$total[global$year == 2023], 1)` trillion in 2023, adjusted for inflation. The visible jump in 2020 reflects the COVID-19 pandemic. Spending is highly concentrated.
+
+\newpage
+
+# 2. Who Pays for Health Care?
+
+```{r funding-mix, fig.height=4.5}
+countries <- c("United States of America", "Germany", "China",
+               "India", "Armenia", "Malawi")
+
+funding <- health_spending |>
+  filter(year == 2023, unit == "% of current health expenditure",
+         country_name %in% countries) |>
+  mutate(source = recode(indicator_code,
+                         gghed_che = "Government",
+                         pvtd_che  = "Domestic private",
+                         ext_che   = "External (aid)"),
+         source = factor(source, levels = c("External (aid)", "Domestic private", "Government")),
+         country_name = recode(country_name, "United States of America" = "USA"))
+
+ggplot(funding, aes(value, reorder(country_name, value * (source == "Government")),
+                    fill = source)) +
+  geom_col(width = 0.7) +
+  scale_x_continuous(labels = label_percent(scale = 1), expand = c(0, 0)) +
+  scale_fill_manual(values = c("Government" = "#2C7FB8",
+                               "Domestic private" = "#FDAE61",
+                               "External (aid)" = "#D7191C"),
+                    breaks = c("Government", "Domestic private", "External (aid)")) +
+  labs(title = "Funding Sources Differ Between Countries",
+       subtitle = "Share of current health expenditure by source, 2023",
+       x = NULL, y = NULL, fill = NULL, caption = src) +
+  theme(legend.position = "top")
+```
+
+Funding structures vary widely. In Germany and the USA, most spending comes from government sources (including compulsory insurance). In Armenia and India, private money (mostly households) dominates, while Malawi relies on external donors for the majority of its health budget.
+
+\newpage
+
+# 3. Where Households Carry the Burden
+
+```{r oop-top, fig.height=5}
+oop <- financing_schemes |>
+  filter(indicator_code == "hf3_che", year == 2023) |>
+  slice_max(value, n = 15)
+
+ggplot(oop, aes(value, reorder(country_name, value))) +
+  geom_segment(aes(x = 0, xend = value, yend = country_name), colour = "grey75") +
+  geom_point(size = 3, colour = "#D7191C") +
+  geom_text(aes(label = round(value)), hjust = -0.6, size = 3.2) +
+  scale_x_continuous(labels = label_percent(scale = 1), limits = c(0, 90),
+                     expand = c(0, 0)) +
+  labs(title = "Out-of-pocket Payments Dominate in Some Countries",
+       subtitle = "15 countries with the highest out-of-pocket share of health spending, 2023",
+       x = NULL, y = NULL, caption = src)
+```
+
+In these countries, households pay for well over half of all health care directly at the point of service, which can push families into financial hardship. Armenia has the highest share in the dataset (about 80%).
+
+```{r oop-trend, fig.height=3.6}
+financing_schemes |>
+  filter(indicator_code == "hf3_che") |>
+  group_by(year) |>
+  summarise(median = median(value),
+            q25 = quantile(value, 0.25), q75 = quantile(value, 0.75)) |>
+  ggplot(aes(year, median)) +
+  geom_ribbon(aes(ymin = q25, ymax = q75), fill = "#D7191C", alpha = 0.15) +
+  geom_line(linewidth = 1, colour = "#D7191C") +
+  scale_y_continuous(labels = label_percent(scale = 1), limits = c(0, NA)) +
+  labs(title = "Globally, the out-of-pocket Share is Slowly Declining",
+       subtitle = "Median across countries (line) and interquartile range (band)",
+       x = NULL, y = NULL, caption = src)
+```
+
+Across countries, the typical out-of-pocket share fell from about 38% in 2000 to under 30% in 2023, as government financing gradually expanded.
+
+\newpage
+
+# 4. What is the money spent on?
+
+```{r purpose, fig.height=4.5}
+purpose <- spending_purpose |>
+  filter(year == 2019, unit == "% of current health expenditure") |>
+  mutate(spending_purpose = recode(spending_purpose,
+    "Ancillary services (non-specified by function)" = "Ancillary services",
+    "Medical goods (non-specified by function)" = "Medical goods",
+    "Governance, and health system and financing administration" = "Administration",
+    "Other health care services not elsewhere classified (n.e.c.)" = "Other",
+    "Long-term care (health)" = "Long-term care"))
+
+ggplot(purpose, aes(value, reorder(spending_purpose, value, median))) +
+  geom_boxplot(fill = "#A6CEE3", outlier.size = 0.8, outlier.alpha = 0.5) +
+  scale_x_continuous(labels = label_percent(scale = 1)) +
+  labs(title = "Curative Care Requires the Most Health Spending",
+       subtitle = paste0("Share of current health expenditure by purpose, 2019 (",
+                         n_distinct(purpose$iso3_code), " countries)"),
+       x = NULL, y = NULL, caption = src)
+```
+
+Curative care takes over half of health spending in a typical country, followed by medical goods (mainly pharmaceuticals) at around 19%. Preventive care receives only about 4% of the median country's spending. We use 2019 because it has one of the best reporting coverages and is not affected by the pandemic.
+
+# Conclusion
+
+Global health spending has more than doubled since 2000, but it is heavily concentrated in high-income countries. How care is financed varies greatly. Some countries rely on government schemes, others on households' own pockets or on foreign aid. While the global out-of-pocket share is slowly falling, it remains above 70% in several countries. Across the board, most money goes to treating illness rather than preventing it.
+
+**Limitations.** The dataset has no population or GDP figures, so per-capita comparisons are not possible. The spending-purpose data covers fewer countries each year, so trends in it should be read with caution.
